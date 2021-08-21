@@ -459,7 +459,7 @@ add_assert_test(Cfg) ->
     LocationIndex = 631210968910285823,
     Txns =
         [
-            user_txn_gateway(Owner, Gateway),
+            user_txn_gateway_add(Owner, Gateway),
             user_txn_assert_location(Owner, Gateway, LocationIndex, 1)
         ],
     TxnBundle = blockchain_txn_bundle_v1:new(Txns),
@@ -478,46 +478,40 @@ add_assert_test(Cfg) ->
 
     ok.
 
-invalid_add_assert_test(Config) ->
+invalid_add_assert_test(Cfg) ->
     %% Test add + assert in a bundled txn
     %% A -> [add_gateway, assert_location]
-    Miners = ?config(miners, Config),
-    [MinerA | _Tail] = Miners,
-    MinerAPubkeyBin = ct_rpc:call(MinerA, blockchain_swarm, pubkey_bin, []),
+    %%
+    %% FIXME It's unclear whether this passes for the right reasons, since
+    %% valid gateway addition fails in add_assert_test. We should probably
+    %% compabine these two test cases and first ensure that adding works then
+    %% try wrong order and ensure it's rejected, then perhaps try another valid
+    %% add.
 
-    {ok, _OwnerPubkey, OwnerSigFun, _OwnerECDHFun} = ct_rpc:call(MinerA, blockchain_swarm, keys, []),
+    ConsensusMembers = ?config(consensus_members, Cfg),
+    Chain = ?config(chain, Cfg),
 
-    %% Create add_gateway txn
-    [{GatewayPubkeyBin, {_GatewayPubkey, _GatewayPrivkey, GatewaySigFun}}] = miner_ct_utils:generate_keys(1),
-    AddGatewayTx = blockchain_txn_add_gateway_v1:new(MinerAPubkeyBin, GatewayPubkeyBin),
-    SignedOwnerAddGatewayTx = blockchain_txn_add_gateway_v1:sign(AddGatewayTx, OwnerSigFun),
-    SignedAddGatewayTxn = blockchain_txn_add_gateway_v1:sign_request(SignedOwnerAddGatewayTx, GatewaySigFun),
-    ct:pal("SignedAddGatewayTxn: ~p", [SignedAddGatewayTxn]),
+    Owner = user_from_swarm(),
+    Gateway = user_new(),
 
-    %% Create assert loc txn
-    Index = 631210968910285823,
-    AssertLocationRequestTx = blockchain_txn_assert_location_v1:new(GatewayPubkeyBin, MinerAPubkeyBin, Index, 1),
-    PartialAssertLocationTxn = blockchain_txn_assert_location_v1:sign_request(AssertLocationRequestTx, GatewaySigFun),
-    SignedAssertLocationTxn = blockchain_txn_assert_location_v1:sign(PartialAssertLocationTxn, OwnerSigFun),
-    ct:pal("SignedAssertLocationTxn: ~p", [SignedAssertLocationTxn]),
-
-    %% Create bundle with txns in bad order
-    BundleTxn = ct_rpc:call(MinerA, blockchain_txn_bundle_v1, new, [[SignedAssertLocationTxn, SignedAddGatewayTxn]]),
-    ct:pal("BundleTxn: ~p", [BundleTxn]),
-
-    %% Submit the bundle txn
-    miner_ct_utils:submit_txn(BundleTxn, Miners),
-
-    %% wait till height 20, should be long enough I believe
-    ok = miner_ct_utils:wait_for_gte(height, Miners, 20),
-
-    %% Get active gateways
-    Chain = ct_rpc:call(MinerA, blockchain_worker, blockchain, []),
-    Ledger = ct_rpc:call(MinerA, blockchain, ledger, [Chain]),
-    ActiveGateways = ct_rpc:call(MinerA, blockchain_ledger_v1, active_gateways, [Ledger]),
+    LocationIndex = 631210968910285823,
+    Txns =
+        [
+            user_txn_gateway_add(Owner, Gateway),
+            user_txn_assert_location(Owner, Gateway, LocationIndex, 1)
+        ],
+    TxnBundle = blockchain_txn_bundle_v1:new(Txns),
+    NumActiveGateways0 = maps:size(chain_get_active_gateways(Chain)),
+    ?assertMatch(
+        {error, {invalid_txns, [{_, invalid_bundled_txns}]}},
+        chain_commit(Chain, ConsensusMembers, TxnBundle)
+    ),
 
     %% Check that the gateway did not get added
-    8 = maps:size(ActiveGateways),
+    ?assertEqual(
+        NumActiveGateways0,
+        maps:size(chain_get_active_gateways(Chain))
+    ),
 
     ok.
 
@@ -686,7 +680,7 @@ user_txn_pay(Src, Dst, Amount, Nonce) ->
     Txn = blockchain_txn_payment_v1:new(user_addr(Src), user_addr(Dst), Amount, Nonce),
     blockchain_txn_payment_v1:sign(Txn, user_sig_fun(Src)).
 
-user_txn_gateway(Owner, Gateway) ->
+user_txn_gateway_add(Owner, Gateway) ->
     Tx1 = blockchain_txn_add_gateway_v1:new(user_addr(Owner), user_addr(Gateway)),
     Tx2 = blockchain_txn_add_gateway_v1:sign(Tx1, user_sig_fun(Owner)),
     Tx3 = blockchain_txn_add_gateway_v1:sign_request(Tx2, user_sig_fun(Gateway)),
