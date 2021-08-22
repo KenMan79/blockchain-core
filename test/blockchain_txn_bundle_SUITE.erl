@@ -515,34 +515,35 @@ invalid_add_assert_test(Cfg) ->
 
     ok.
 
-single_txn_bundle_test(Config) ->
-    Miners = ?config(miners, Config),
-    [Src, Dst | _Tail] = Miners,
-    SrcAddr = ct_rpc:call(Src, blockchain_swarm, pubkey_bin, []),
-    DstAddr = ct_rpc:call(Dst, blockchain_swarm, pubkey_bin, []),
+single_txn_bundle_test(Cfg) ->
+    ConsensusMembers = ?config(consensus_members, Cfg),
+    Chain = ?config(chain, Cfg),
 
-    %% check initial balances
-    5000 = miner_ct_utils:get_balance(Src, SrcAddr),
-    5000 = miner_ct_utils:get_balance(Dst, DstAddr),
+    %% Src needs a starting balance, so we pick one from the consensus group.
+    %% Dst has no need for a starting balance, so we use an arbitrary address.
+    {Src, _} = user_pick_from_cg(ConsensusMembers),
+    Dst = user_new(),
 
-    %% Create first payment txn
-    Txn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 1]),
-    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Src, blockchain_swarm, keys, []),
-    SignedTxn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn1, SigFun]),
-    ct:pal("SignedTxn1: ~p", [SignedTxn1]),
+    SrcBalance0 = user_balance(Chain, Src),
+    DstBalance0 = user_balance(Chain, Dst),
 
-    %% Create bundle
-    BundleTxn = ct_rpc:call(Src, blockchain_txn_bundle_v1, new, [[SignedTxn1]]),
-    ct:pal("BundleTxn: ~p", [BundleTxn]),
-    %% Submit the bundle txn
-    miner_ct_utils:submit_txn(BundleTxn, Miners),
-    %% wait till height is 15, ideally should wait till the payment actually occurs
-    %% it should be plenty fast regardless
-    ok = miner_ct_utils:wait_for_gte(height, Miners, 15),
+    %% Expected initial balances:
+    ?assertEqual(5000, SrcBalance0),
+    ?assertEqual(   0, DstBalance0),
+
+    Amount = 1000,
+    Txns = [user_txn_pay(Src, Dst, Amount, 1)],
+    TxnBundle = blockchain_txn_bundle_v1:new(Txns),
 
     %% The bundle is invalid since it does not contain atleast two txns in it
-    5000 = miner_ct_utils:get_balance(Src, SrcAddr),
-    5000 = miner_ct_utils:get_balance(Dst, DstAddr),
+    ?assertMatch(
+        {error, {invalid_txns, [{_, invalid_min_bundle_size}]}},
+        chain_commit(Chain, ConsensusMembers, TxnBundle)
+    ),
+
+    %% Sanity check that balances haven't changed:
+    ?assertEqual(SrcBalance0, user_balance(Chain, Src)),
+    ?assertEqual(DstBalance0, user_balance(Chain, Dst)),
 
     ok.
 
