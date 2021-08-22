@@ -547,68 +547,41 @@ single_txn_bundle_test(Cfg) ->
 
     ok.
 
-bundleception_test(Config) ->
-    Miners = ?config(miners, Config),
-    [Src, Dst | _Tail] = Miners,
-    SrcAddr = ct_rpc:call(Src, blockchain_swarm, pubkey_bin, []),
-    DstAddr = ct_rpc:call(Dst, blockchain_swarm, pubkey_bin, []),
+bundleception_test(Cfg) ->
+    ConsensusMembers0 = ?config(consensus_members, Cfg),
+    Chain = ?config(chain, Cfg),
+    {Src, ConsensusMembers1} = user_pick_from_cg(ConsensusMembers0),
+    {Dst, _ConsensusMembers} = user_pick_from_cg(ConsensusMembers1),
+    SrcBalance0 = user_balance(Chain, Src),
+    DstBalance0 = user_balance(Chain, Dst),
 
-    %% check initial balances
-    5000 = miner_ct_utils:get_balance(Src, SrcAddr),
-    5000 = miner_ct_utils:get_balance(Dst, DstAddr),
+    ?assertEqual(5000, SrcBalance0),
+    ?assertEqual(5000, DstBalance0),
 
-    %% Src Sigfun
-    {ok, _Pubkey, SigFun, _ECDHFun} = ct_rpc:call(Src, blockchain_swarm, keys, []),
+    AmountPerTxn = 1000,
+    TxnBundle1 =
+        blockchain_txn_bundle_v1:new(
+            [
+                user_txn_pay(Src, Dst, AmountPerTxn, 1),
+                user_txn_pay(Src, Dst, AmountPerTxn, 2)
+            ]
+        ),
+    TxnBundle2 =
+        blockchain_txn_bundle_v1:new(
+            [
+                user_txn_pay(Src, Dst, AmountPerTxn, 3),
+                user_txn_pay(Src, Dst, AmountPerTxn, 4)
+            ]
+        ),
+    TxnBundleCeption = blockchain_txn_bundle_v1:new([TxnBundle1, TxnBundle2]),
 
-    %% --------------------------------------------------------------
-    %% Bundle 1 contents
-    %% Create first payment txn
-    Txn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 1]),
-    SignedTxn1 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn1, SigFun]),
-    ct:pal("SignedTxn1: ~p", [SignedTxn1]),
+    ?assertMatch(
+        {error, {invalid_txns, [{_, invalid_bundleception}]}},
+        chain_commit(Chain, ConsensusMembers0, TxnBundleCeption)
+    ),
 
-    %% Create second payment txn
-    Txn2 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 2]),
-    SignedTxn2 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn2, SigFun]),
-    ct:pal("SignedTxn2: ~p", [SignedTxn2]),
-
-    %% Create bundle
-    BundleTxn1 = ct_rpc:call(Src, blockchain_txn_bundle_v1, new, [[SignedTxn1, SignedTxn2]]),
-    ct:pal("BundleTxn1: ~p", [BundleTxn1]),
-    %% --------------------------------------------------------------
-
-    %% --------------------------------------------------------------
-    %% Bundle 2 contents
-    %% Create third payment txn
-    Txn3 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 3]),
-    SignedTxn3 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn3, SigFun]),
-    ct:pal("SignedTxn3: ~p", [SignedTxn3]),
-
-    %% Create fourth payment txn
-    Txn4 = ct_rpc:call(Src, blockchain_txn_payment_v1, new, [SrcAddr, DstAddr, 1000, 4]),
-    SignedTxn4 = ct_rpc:call(Src, blockchain_txn_payment_v1, sign, [Txn4, SigFun]),
-    ct:pal("SignedTxn4: ~p", [SignedTxn4]),
-
-    %% Create bundle
-    BundleTxn2 = ct_rpc:call(Src, blockchain_txn_bundle_v1, new, [[SignedTxn3, SignedTxn4]]),
-    ct:pal("BundleTxn2: ~p", [BundleTxn2]),
-    %% --------------------------------------------------------------
-
-
-    %% Do bundleception
-    BundleInBundleTxn = ct_rpc:call(Src, blockchain_txn_bundle_v1, new, [[BundleTxn1, BundleTxn2]]),
-    ct:pal("BundleInBundleTxn: ~p", [BundleInBundleTxn]),
-
-    %% Submit the bundle txn
-    miner_ct_utils:submit_txn(BundleInBundleTxn, Miners),
-
-    %% wait till height is 15, ideally should wait till the payment actually occurs
-    %% it should be plenty fast regardless
-    ok = miner_ct_utils:wait_for_gte(height, Miners, 15),
-
-    %% Balances should not have changed
-    5000 = miner_ct_utils:get_balance(Src, SrcAddr),
-    5000 = miner_ct_utils:get_balance(Dst, DstAddr),
+    ?assertEqual(SrcBalance0, user_balance(Chain, Src)),
+    ?assertEqual(DstBalance0, user_balance(Chain, Dst)),
 
     ok.
 
