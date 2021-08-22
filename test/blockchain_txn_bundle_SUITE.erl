@@ -548,15 +548,15 @@ single_txn_bundle_test(Cfg) ->
     ok.
 
 bundleception_test(Cfg) ->
-    ConsensusMembers0 = ?config(consensus_members, Cfg),
+    ConsensusMembers = ?config(consensus_members, Cfg),
     Chain = ?config(chain, Cfg),
-    {Src, ConsensusMembers1} = user_pick_from_cg(ConsensusMembers0),
-    {Dst, _ConsensusMembers} = user_pick_from_cg(ConsensusMembers1),
+    {Src, _} = user_pick_from_cg(ConsensusMembers),
+    Dst = user_new(),
     SrcBalance0 = user_balance(Chain, Src),
     DstBalance0 = user_balance(Chain, Dst),
 
     ?assertEqual(5000, SrcBalance0),
-    ?assertEqual(5000, DstBalance0),
+    ?assertEqual(   0, DstBalance0),
 
     AmountPerTxn = 1000,
     TxnBundle1 =
@@ -577,7 +577,7 @@ bundleception_test(Cfg) ->
 
     ?assertMatch(
         {error, {invalid_txns, [{_, invalid_bundleception}]}},
-        chain_commit(Chain, ConsensusMembers0, TxnBundleCeption)
+        chain_commit(Chain, ConsensusMembers, TxnBundleCeption)
     ),
 
     ?assertEqual(SrcBalance0, user_balance(Chain, Src)),
